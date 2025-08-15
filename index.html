@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#7DF9FF" />
+  <title>在庫入力PWA</title>
+  <link rel="manifest" href="/assets/manifest-CW12D8bC.json">
+  <link rel="apple-touch-icon" href="/assets/icon-192-B_SY1GJM.png">
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js');
+      });
+    }
+  </script>
+<style>
+    :root {
+      --primary: #7DF9FF;      /* electric blue */
+      --primary-ink: #003a46;  /* readable on electric blue */
+      --bg: #0b1114;
+      --panel: #121a1f;
+      --text: #e6f2f5;
+      --muted: #9fb7bf;
+      --danger: #ff6b6b;
+      --success: #14d19d;
+      --warning: #ffd166;
+      --border: #1f2a31;
+      --focus: rgba(125, 249, 255, 0.55);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    .wrap {
+      max-width: 680px; margin: 0 auto; padding: 24px 16px 80px;
+    }
+    h1 { font-size: 20px; margin: 0 0 16px; color: var(--text); }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    }
+    .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+    .field { margin-bottom: 14px; }
+    .label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], input[type="number"] {
+      width: 100%; padding: 12px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: #0f161a; color: var(--text); outline: none;
+    }
+    input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); }
+    .btn {
+      appearance: none; border: none; cursor: pointer; border-radius: 12px; padding: 12px 16px;
+      background: var(--primary); color: var(--primary-ink); font-weight: 700;
+      transition: transform .05s ease, filter .15s ease, opacity .2s ease;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn:active { transform: translateY(1px) scale(0.995); }
+    .btn.secondary { background: #18333a; color: var(--text); border: 1px solid var(--border); }
+    .btn.ghost { background: transparent; color: var(--text); border: 1px dashed var(--border); }
+    .actions { display: flex; gap: 8px; }
+    .toast {
+      position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+      background: #0c1418; border: 1px solid var(--border); color: var(--text);
+      padding: 10px 14px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      max-width: 90vw; font-size: 14px; display: none;
+    }
+    .toast.show { display: block; }
+    .toast.success { border-color: rgba(20,209,157,.5); }
+    .toast.error { border-color: rgba(255,107,107,.5); }
+    .toast.warn { border-color: rgba(255,209,102,.6); }
+    .hint { font-size: 12px; color: var(--muted); }
+    .scanner-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.75); display: none; z-index: 9999;
+      align-items: center; justify-content: center; padding: env(safe-area-inset-top) 12px env(safe-area-inset-bottom);
+    }
+    .scanner {
+      width: min(100vw, 720px); aspect-ratio: 3 / 4; background: #000; border-radius: 14px; overflow: hidden; position: relative;
+      border: 2px solid var(--primary);
+    }
+    .scanner video, .scanner canvas {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    .scan-frame {
+      position: absolute; inset: 10% 8%; border: 2px solid var(--primary); border-radius: 12px; box-shadow: 0 0 20px rgba(125,249,255,.35) inset;
+      pointer-events: none;
+    }
+    .scanner-topbar, .scanner-bottombar {
+      position: absolute; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px;
+    }
+    .scanner-topbar { top: 0; }
+    .scanner-bottombar { bottom: 0; justify-content: center; }
+    .pill {
+      background: rgba(15,22,26,.75); backdrop-filter: blur(6px); border: 1px solid var(--border);
+      padding: 6px 10px; border-radius: 999px; color: var(--text); font-size: 12px;
+    }
+    .ios-tip {
+      font-size: 12px; color: var(--muted); margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>在庫入力</h1>
+    <div class="card">
+      <div class="field">
+        <label class="label">枠番</label>
+        <div class="row">
+          <input id="frameNo" type="text" inputmode="text" autocomplete="off" placeholder="例: A-0123">
+          <button id="scanFrameBtn" class="btn secondary" type="button">スキャン</button>
+        </div>
+        <div class="ios-tip">iOSでは「カメラのアクセス」を許可してください。PWAの場合はHTTPSが必要です。</div>
+      </div>
+
+      <div class="field">
+        <label class="label">伝票番号</label>
+        <div class="row">
+          <input id="genpyoNo" type="text" inputmode="text" autocomplete="off" placeholder="例: 24-000123">
+          <button id="scanGenpyoBtn" class="btn secondary" type="button">スキャン</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="label">インデックス</label>
+        <input id="indexNo" type="text" inputmode="text" autocomplete="off" placeholder="任意">
+      </div>
+
+      <div class="field">
+        <label class="label">本数</label>
+        <input id="count" type="number" inputmode="numeric" min="1" step="1" placeholder="1以上の整数">
+      </div>
+
+      <div class="actions">
+        <button id="submitBtn" class="btn" type="button">送信</button>
+        <button id="retryBtn" class="btn ghost" type="button" title="未送信キューを再送">未送信を送信</button>
+      </div>
+      <div class="hint">オフラインでも入力は保存され、オンライン復帰時に自動再送します。</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="scannerOverlay" class="scanner-overlay" aria-hidden="true">
+    <div class="scanner" role="dialog" aria-modal="true" aria-label="バーコードスキャナ">
+      <div class="scanner-topbar">
+        <span class="pill">カメラにバーコードを合わせてください</span>
+        <button id="closeScannerBtn" class="btn secondary" type="button">閉じる</button>
+      </div>
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="canvas" style="display:none"></canvas>
+      <div class="scan-frame"></div>
+      <div class="scanner-bottombar">
+        <button id="flipBtn" class="btn secondary" type="button">カメラ切替</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- iOS/古環境向けの最後の手段（写真から読み取り） -->
+  <input id="fileCapture" type="file" accept="image/*" capture="environment" style="display:none" />
+
+  <script>
+    // ===== 設定（Kintone等の送信先）===========================================
+    const CONFIG = {
+      // Kintoneドメイン（https://xxxxx.cybozu.com の xxxxx 部分も含めてOK）
+      kintoneBaseUrl: "https://ymlrgl4bd9r5.cybozu.com",
+      appId: "1", // アプリID
+      apiToken: "m7pEokPHuSX1cpzEC2DgWXFkNVqBvPfU5vL4m7iPKEN", // APIトークン（レコード追加権限）
+      // スキャン：連続で同じ値を誤検出しないためのクールダウン(ms)
+      scanCooldownMs: 1200
+    };
+
+    // ===== ユーティリティ ====================================================
+    const $ = (sel) => document.querySelector(sel);
+    function toast(msg, type = "info", ms = 3200) {
+      const t = $("#toast");
+      t.textContent = msg;
+      t.className = `toast show ${type === "error" ? "error" : type === "success" ? "success" : type === "warn" ? "warn" : ""}`;
+      clearTimeout(t._to);
+      t._to = setTimeout(() => (t.className = "toast"), ms);
+    }
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    // 直前の送信を弾くための簡易ハッシュ（重複送信防止）
+    const hashPayload = (p) => {
+      try { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(p))).then(b=>Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("")); }
+      catch { return Promise.resolve(String(Date.now()) + Math.random()); }
+    };
+
+    // ===== IndexedDB（未送信キュー）=========================================
+    const DB_NAME = "inventory-app";
+    const STORE = "outbox";
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: "id", autoIncrement: true });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function dbAdd(item) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).add(item);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function dbAll() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readonly");
+        const req = tx.objectStore(STORE).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function dbDelete(id) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).delete(id);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // ===== Kintone 送信 =======================================================
+    async function submitToKintone(payload) {
+      // 必要に応じてここで payload → kintone レコード形式へ変換
+      const body = {
+        app: CONFIG.appId,
+        record: {
+          frameNo: { value: payload.frameNo },
+          genpyoNo: { value: payload.genpyoNo },
+          indexNo: { value: payload.indexNo ?? "" },
+          count: { value: String(payload.count) },
+          timestamp: { value: new Date().toISOString() }
+        }
+      };
+      const res = await fetch(`${CONFIG.kintoneBaseUrl}/k/v1/record.json`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cybozu-API-Token": CONFIG.apiToken
+        },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        let info = "";
+        try { const j = await res.json(); info = j?.message || j?.code || ""; } catch {}
+        const err = new Error(`Kintoneエラー ${res.status} ${info}`.trim());
+        err.name = "KINTONE_ERROR";
+        throw err;
+      }
+      return res.json();
+    }
+
+    // ===== 送信処理（重複防止・エラー表示・オフライン保存）====================
+    let submitting = false;
+    let lastPayloadHash = "";
+    let lastClickAt = 0;
+
+    async function sendCurrent() {
+      if (submitting) return;
+      const now = Date.now();
+      if (now - lastClickAt < 900) return; // 連打ガード
+      lastClickAt = now;
+
+      const payload = readForm();
+      const v = validate(payload);
+      if (!v.ok) { toast(v.msg, "error"); return; }
+
+      const h = await hashPayload(payload);
+      if (h === lastPayloadHash) { toast("同一内容の連続送信を防止しました", "warn"); return; }
+
+      disableUI(true);
+      submitting = true;
+      try {
+        if (!navigator.onLine) throw new Error("OFFLINE");
+
+        await submitToKintone(payload);
+        lastPayloadHash = h;
+        toast("送信完了", "success");
+        resetForm();
+        // オンライン時にたまっている分を送る
+        const sent = await drainQueue();
+        if (sent > 0) toast(`未送信 ${sent} 件も送信完了`, "success", 2500);
+      } catch (e) {
+        if (e?.name === "KINTONE_ERROR") {
+          toast(String(e.message).slice(0, 140), "error");
+        } else {
+          await dbAdd({ createdAt: Date.now(), payload });
+          toast("オフライン/失敗のため未送信キューに保存しました", "warn");
+        }
+      } finally {
+        submitting = false;
+        disableUI(false);
+      }
+    }
+
+    async function drainQueue() {
+      const all = await dbAll();
+      let sent = 0;
+      for (const item of all) {
+        try {
+          await submitToKintone(item.payload);
+          await dbDelete(item.id);
+          sent++;
+          await sleep(120); // スパイク回避
+        } catch (e) {
+          // 一件でも失敗したら残す（権限エラー等）
+        }
+      }
+      return sent;
+    }
+
+    function readForm() {
+      return {
+        frameNo: $("#frameNo").value.trim(),
+        genpyoNo: $("#genpyoNo").value.trim(),
+        indexNo: $("#indexNo").value.trim(),
+        count: Number($("#count").value)
+      };
+    }
+    function validate(p) {
+      if (!p.frameNo) return { ok: false, msg: "枠番を入力してください" };
+      if (!p.genpyoNo) return { ok: false, msg: "伝票番号を入力してください" };
+      if (!Number.isInteger(p.count) || p.count <= 0) return { ok: false, msg: "本数は1以上の整数で入力してください" };
+      return { ok: true };
+    }
+    function resetForm() {
+      $("#frameNo").value = "";
+      $("#genpyoNo").value = "";
+      $("#indexNo").value = "";
+      $("#count").value = "";
+    }
+    function disableUI(disabled) {
+      $("#submitBtn").disabled = disabled;
+      $("#retryBtn").disabled = disabled;
+      $("#scanFrameBtn").disabled = disabled;
+      $("#scanGenpyoBtn").disabled = disabled;
+    }
+
+    // ===== スキャナ（BarcodeDetector → ZXingの順にフォールバック）============
+    const scanner = {
+      overlay: $("#scannerOverlay"),
+      video: $("#video"),
+      canvas: $("#canvas"),
+      targetInput: null,
+      stream: null,
+      facing: "environment",
+      decoder: null,
+      usingZXing: false,
+      lastDecoded: "",
+      lastAt: 0
+    };
+
+    async function openScanner(targetInput) {
+      scanner.targetInput = targetInput;
+      scanner.overlay.style.display = "flex";
+      scanner.overlay.setAttribute("aria-hidden", "false");
+      try {
+        if ("BarcodeDetector" in window) {
+          await startNativeDetector();
+        } else {
+          await startZXing();
+        }
+      } catch (e) {
+        toast("カメラ初期化に失敗しました。写真から読み取りに切り替えます。", "warn");
+        scanner.overlay.style.display = "none";
+        $("#fileCapture").click();
+      }
+    }
+    async function closeScanner() {
+      stopStreams();
+      if (scanner.decoder?.reset) try { scanner.decoder.reset(); } catch {}
+      scanner.overlay.style.display = "none";
+      scanner.overlay.setAttribute("aria-hidden", "true");
+    }
+    function stopStreams() {
+      if (scanner.stream) {
+        scanner.stream.getTracks().forEach(t => t.stop());
+        scanner.stream = null;
+      }
+    }
+    async function flipCamera() {
+      scanner.facing = scanner.facing === "environment" ? "user" : "environment";
+      if (scanner.usingZXing) await startZXing();
+      else await startNativeDetector();
+    }
+
+    // Native BarcodeDetector
+    let nativeLoopAbort = null;
+    async function startNativeDetector() {
+      scanner.usingZXing = false;
+      if (nativeLoopAbort) nativeLoopAbort.abort();
+      nativeLoopAbort = new AbortController();
+
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: scanner.facing },
+          width: { ideal: 1280 }, height: { ideal: 720 }
+        }
+      };
+      if (isIOS()) {
+        // iOSは exact だと失敗する場合がある
+        constraints.video.facingMode = scanner.facing;
+      }
+
+      stopStreams();
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      scanner.stream = stream;
+      const v = scanner.video;
+      v.srcObject = stream;
+      v.setAttribute("playsinline", "");
+      v.muted = true;
+      await v.play().catch(() => {});
+      const Detector = window.BarcodeDetector;
+      const formats = ["qr_code", "ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e", "itf", "codabar", "data_matrix", "pdf417"];
+      const detector = new Detector({ formats });
+
+      const loop = async () => {
+        if (nativeLoopAbort.signal.aborted) return;
+        try {
+          const barcodes = await detector.detect(v);
+          if (barcodes && barcodes.length) {
+            for (const b of barcodes) {
+              if (maybeAcceptDecode(b.rawValue)) return;
+            }
+          }
+        } catch {}
+        requestAnimationFrame(loop);
+      };
+      loop();
+    }
+
+    // ZXing fallback (@zxing/browser via ESM CDN)
+    async function startZXing() {
+      scanner.usingZXing = true;
+      stopStreams();
+      if (!scanner.decoder) {
+        try {
+          const { BrowserMultiFormatReader } = await import("https://cdn.jsdelivr.net/npm/@zxing/browser@latest/+esm");
+          scanner.decoder = new BrowserMultiFormatReader();
+        } catch (e) {
+          throw new Error("ZXingの読み込みに失敗");
+        }
+      }
+      const v = scanner.video;
+      v.setAttribute("playsinline", "");
+      v.muted = true;
+
+      // 対象カメラ選択
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === "videoinput");
+      let deviceId = undefined;
+      if (cams.length > 1 && scanner.facing === "environment") {
+        const back = cams.find(d => /back|rear|environment/i.test(d.label));
+        deviceId = back?.deviceId || cams[cams.length - 1].deviceId;
+      } else if (cams.length) {
+        deviceId = cams[0].deviceId;
+      }
+
+      await scanner.decoder.decodeFromVideoDevice(deviceId ?? null, v, (result, err, controls) => {
+        if (result?.text) {
+          maybeAcceptDecode(result.text);
+        }
+      });
+    }
+
+    function maybeAcceptDecode(text) {
+      const now = Date.now();
+      if (text === scanner.lastDecoded && now - scanner.lastAt < CONFIG.scanCooldownMs) return false;
+      scanner.lastDecoded = text;
+      scanner.lastAt = now;
+      if (scanner.targetInput) {
+        scanner.targetInput.value = text;
+        scanner.targetInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      toast(`読み取り: ${text}`, "success", 1800);
+      closeScanner();
+      return true;
+    }
+
+    // 画像ファイルからの読み取り（最終フォールバック）
+    $("#fileCapture").addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const bmp = await createImageBitmap(file);
+        if ("BarcodeDetector" in window) {
+          const Detector = window.BarcodeDetector;
+          const detector = new Detector();
+          const rs = await detector.detect(bmp);
+          if (rs?.[0]?.rawValue) {
+            if (scanner.targetInput) scanner.targetInput.value = rs[0].rawValue;
+            toast(`読み取り: ${rs[0].rawValue}`, "success", 1800);
+            return;
+          }
+        }
+        // ZXingにフォールバック
+        const { BrowserMultiFormatReader } = await import("https://cdn.jsdelivr.net/npm/@zxing/browser@latest/+esm");
+        const reader = new BrowserMultiFormatReader();
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(file);
+        await new Promise(res => img.onload = res);
+        const res = await reader.decodeFromImageElement(img).catch(()=>null);
+        if (res?.text) {
+          if (scanner.targetInput) scanner.targetInput.value = res.text;
+          toast(`読み取り: ${res.text}`, "success", 1800);
+        } else {
+          toast("画像からバーコードを検出できませんでした", "error");
+        }
+      } catch {
+        toast("画像の解析に失敗しました", "error");
+      } finally {
+        e.target.value = "";
+      }
+    });
+
+    // ===== イベント配線 =======================================================
+    $("#scanFrameBtn").addEventListener("click", () => openScanner($("#frameNo")));
+    $("#scanGenpyoBtn").addEventListener("click", () => openScanner($("#genpyoNo")));
+    $("#closeScannerBtn").addEventListener("click", closeScanner);
+    $("#flipBtn").addEventListener("click", flipCamera);
+    $("#submitBtn").addEventListener("click", sendCurrent);
+    $("#retryBtn").addEventListener("click", async () => {
+      disableUI(true);
+      try {
+        const sent = await drainQueue();
+        if (sent > 0) toast(`未送信 ${sent} 件を送信しました`, "success");
+        else toast("未送信はありません", "info");
+      } finally {
+        disableUI(false);
+      }
+    });
+
+    window.addEventListener("online", async () => {
+      const sent = await drainQueue();
+      if (sent > 0) toast(`オンライン復帰: 未送信 ${sent} 件を送信`, "success");
+    });
+    window.addEventListener("offline", () => toast("オフラインになりました（入力は保存されます）", "warn"));
+
+    // iOS向けの小さな配慮
+    if (isIOS()) {
+      // iOSは自動再生/音声付き制限が厳しいため、動画要素を静音・インライン再生化済み
+      // スクロールの意図しない拡大を避ける（入力時）
+      document.addEventListener("focusin", (e) => {
+        if (e.target.tagName === "INPUT") document.body.style.height = "150vh";
+      });
+      document.addEventListener("focusout", () => { document.body.style.height = ""; });
+    }
+  </script>
+</body>
+</html>
